@@ -655,6 +655,12 @@ sub do_smtp_auth {
 				$auth_attempted = 1;
 			}
 		}
+		foreach my $type (@{$G::auth_map_t{'GSSAPI'}}) {
+			if ($btype eq $type) {
+				return(0) if (do_smtp_auth_gssapi($au, $ap, $type));
+				$auth_attempted = 1;
+			}
+		}
 	}
 
 	return $auth_attempted ? 4 : 2;
@@ -823,6 +829,43 @@ sub do_smtp_auth_plain {
 	return(do_smtp_gen("AUTH $as " . eb64("\0$u\0$p"), '235', undef, '',
 	                   $G::auth_showpt ? "AUTH $as \\0$u\\0" . ($G::auth_hidepw || $p)
 	                   : "AUTH $as " . eb64("\0$u\0" . ($G::auth_hidepw || $p))));
+}
+
+sub do_smtp_auth_gssapi {
+	my $u  = shift; # auth user (target service)
+	my $p  = shift; # auth password (target host)
+	my $as = shift; # auth string
+	my $r  = '';    # will store smtp response
+
+	my $sasl = Authen::SASL->new(
+		debug     => 1,
+		mechanism => 'GSSAPI',
+	);
+
+	# asking KDC for $u/$p@DEFAULT.REALM
+	#
+	# e.g. smtp/host.example.com@EXAMPLE.COM
+	# $u = "smtp";
+	# $p = "host.example.com";
+	my $sasl_client = $sasl->client_new($u, $p);
+
+	my $auth_string = $sasl_client->client_start();
+	$sasl_client->need_step() || return(0);
+
+	my $auth_prefix = "AUTH $as ";
+	while ($sasl_client->need_step()) {
+		do_smtp_gen($auth_prefix . eb64($auth_string), '334', \$r) || return(0);
+
+		$r =~ s/^....//;
+		$r = db64($r);
+
+		$auth_string = $sasl_client->client_step($r);
+		$auth_prefix = "";
+	}
+	do_smtp_gen(eb64($auth_string), '235', \$r) || return(0);
+
+	return(0) if ($sasl_client->code() != 0);
+	return(1);
 }
 
 sub do_smtp_helo {
@@ -1393,6 +1436,7 @@ sub load_dependencies {
 		auth_cram_sha1  => { name => "AUTH CRAM-SHA1",           req => ['Digest::SHA']      },
 		auth_ntlm       => { name => "AUTH NTLM",                req => ['Authen::NTLM']      },
 		auth_digest_md5 => { name => "AUTH DIGEST-MD5",          req => ['Authen::SASL']      },
+		auth_gssapi     => { name => "AUTH GSSAPI",              req => ['Authen::SASL']      },
 		dns             => { name => "MX Routing",               req => ['Net::DNS']          },
 		tls             => { name => "TLS",                      req => ['Net::SSLeay']       },
 		pipe            => { name => "Pipe Transport",           req => ['IPC::Open2']        },
@@ -2401,7 +2445,7 @@ sub process_args {
 
 		# handle the --auth-map options plus our default mappings
 		foreach (split(/\s*,\s*/, $o->{auth_map}),"PLAIN=PLAIN","LOGIN=LOGIN",
-		                          "CRAM-MD5=CRAM-MD5","DIGEST-MD5=DIGEST-MD5",
+		                          "CRAM-MD5=CRAM-MD5","DIGEST-MD5=DIGEST-MD5","GSSAPI=GSSAPI",
 		                          "CRAM-SHA1=CRAM-SHA1","NTLM=NTLM","SPA=NTLM","MSN=NTLM")
 		{
 			my($alias,$type)        = split(/=/, uc($_), 2);
@@ -2456,6 +2500,8 @@ sub process_args {
 					ptrans(12, avail_str("auth_ntlm"))       if ($o->{auth} ne 'ANY');
 				} elsif ($G::auth_map_f{$type} eq 'DIGEST-MD5' && !avail("auth_digest_md5")) {
 					ptrans(12, avail_str("auth_digest_md5")) if ($o->{auth} ne 'ANY');
+				} elsif ($G::auth_map_f{$type} eq 'GSSAPI' && !avail("auth_gssapi")) {
+					ptrans(12, avail_str("auth_gssapi")) if ($o->{auth} ne 'ANY');
 				} else {
 					$valid_auth_found = 1;
 					push(@{$n{a_type}}, $type);
@@ -3209,6 +3255,18 @@ The CRAM-SHA1 authenticator requires the Digest::SHA module.  This type has only
 These authenticators require the Authen::NTLM module.  Note that there are two modules using the Authen::NTLM namespace on CPAN.  The Mark Bush implementation (Authen/NTLM-1.03.tar.gz) is the version required by swaks.  This type has been tested against Exim, Communigate, and Exchange 2007.
 
 In addition to the standard username and password, this authentication type can also recognize a "domain".  The domain can be set using the --auth-extra "domain" keyword.  Note that this has never been tested with a mail server that doesn't ignore DOMAIN so this may be implemented incorrectly.
+
+=item GSSAPI
+
+The GSSAPI authenticator (RFC4752, RFC2222/7.2) requires the Authen::SASL module and probably Authen::SASL::XS (for cyrus libs).
+
+-au, --auth-user option is used as the target service name that on your server. In most cases it is "smtp", but some server configurations may use "host".
+
+-ap, --auth-password option is used as the target server FQDN. Probably this is a DNS PTR record for your server address.
+
+You should have TGT in your cache (kinit). The requesting principal is constructed as service/FQDN@DEFAULT.REALM. The ticket for the target service will be acquired automatically (standard SASL/GSSAPI behavior).
+
+Example: for smtp/host.example.com@EXAMPLE.COM: --auth-user=smtp --auth-password=host.example.com
 
 =back
 
