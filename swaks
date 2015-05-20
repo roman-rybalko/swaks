@@ -14,7 +14,7 @@ use strict;
 
 $|            = 1;
 my($p_name)   = $0 =~ m|/?([^/]+)$|;
-my $p_version = build_version("20130209.0", '$Id: swaks 332 2013-02-09 19:39:32Z jetmore $');
+my $p_version = build_version("20150519.0", '$Id$');
 my $p_usage   = "Usage: $p_name [--help|--version] (see --help for details)";
 my $p_cp      = <<'EOM';
         Copyright (c) 2003-2008,2010-2013 John Jetmore <jj33@pobox.com>
@@ -3743,6 +3743,10 @@ Seen it in the headline "SA se bes en swaks gekledes in 2011", which was transla
 =head1 CONTACT
 
 =over 4
+
+=item swaks@romanr.info
+
+Questions, patches, requests, etc.
 
 =item proj-swaks@jetmore.net
 
