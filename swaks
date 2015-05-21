@@ -14,10 +14,11 @@ use strict;
 
 $|            = 1;
 my($p_name)   = $0 =~ m|/?([^/]+)$|;
-my $p_version = build_version("20150519.0", '$Id$');
+my $p_version = build_version("20150521.0", '$Id$');
 my $p_usage   = "Usage: $p_name [--help|--version] (see --help for details)";
 my $p_cp      = <<'EOM';
         Copyright (c) 2003-2008,2010-2013 John Jetmore <jj33@pobox.com>
+        Copyright (c) 2014-2015 Roman Rybalko <swaks@romanr.info>
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -297,6 +298,14 @@ sub sendmail {
 
 	# QUIT here if the user has asked us to do so
 	do_smtp_quit(1, 0) if ($G::quit_after eq 'auth');
+
+	# handle VRFY here if user has requested it
+	if (defined($G::vrfy)) {
+		do_smtp_vrfy($G::vrfy ? $G::vrfy : $to); # failures in this handled by smtp_vrfy_callback
+	}
+
+	# QUIT here if the user has asked us to do so
+	do_smtp_quit(1, 0) if ($G::quit_after eq 'vrfy');
 
 	# send MAIL
 	do_smtp_mail($from); # failures in this handled by smtp_mail_callback
@@ -909,6 +918,29 @@ sub do_smtp_helo {
 	return(0);
 }
 
+sub do_smtp_vrfy {
+	my $m = shift;  # string of comma separated recipients
+	my @a = split(/,/, $m);
+	$G::smtp_vrfy_total = scalar(@a);
+
+	foreach my $addr (@a) {
+		transact(cxn_string => "VRFY $addr", expect => '250', defer => 1,
+		         fail_callback => \&smtp_vrfy_callback);
+	}
+
+	return(1); # the callback handles failures, so just return here
+}
+
+sub smtp_vrfy_callback {
+	# record that a failure occurred
+	$G::smtp_vrfy_failures++;
+
+	# if the number of failures is the same as the total rcpts (if every rcpt rejected), quit.
+	if ($G::smtp_vrfy_failures == $G::smtp_vrfy_total) {
+		do_smtp_quit(1, 24);
+	}
+}
+
 sub do_smtp_mail {
 	my $m = shift;  # from address
 
@@ -925,7 +957,6 @@ sub smtp_mail_callback {
 
 sub do_smtp_rcpt {
 	my $m = shift;  # string of comma separated recipients
-	my $f = 0;      # The number of failures we've experienced
 	my @a = split(/,/, $m);
 	$G::smtp_rcpt_total = scalar(@a);
 	
@@ -1695,6 +1726,9 @@ sub get_option_struct {
 		# XCLIENT REVERSE_NAME
 		{ opts => ['xclient-reverse-name'],           suffix => ':s',
 		  okey => 'xclient_reverse_name',             type => 'scalar', },
+		# Issue VRFY before MAIL
+		{ opts => ['vrfy'],                           suffix => ':s',
+		  okey => 'vrfy',                             type => 'scalar', },
 	);
 
 	return(\@G::raw_option_data);
@@ -2029,7 +2063,8 @@ sub process_args {
 		elsif ($G::quit_after ne 'connect' && $G::quit_after ne 'first-helo' &&
 		       $G::quit_after ne 'tls'     && $G::quit_after ne 'helo'       &&
 		       $G::quit_after ne 'auth'    && $G::quit_after ne 'mail'       &&
-		       $G::quit_after ne 'rcpt'    && $G::quit_after ne 'xclient')
+		       $G::quit_after ne 'rcpt'    && $G::quit_after ne 'xclient'    &&
+		       $G::quit_after ne 'vrfy')
 		{
 			ptrans(12, "Unknown quit value $G::quit_after, exiting");
 			exit(1);
@@ -2547,7 +2582,9 @@ sub process_args {
 			}
 		} # end avail("auth")
 	} # end auth parsing
-	
+
+	$G::vrfy = $o->{vrfy} if (defined($o->{vrfy}));
+
 	# the very last thing we do is swap out the body if --dump-as-body used
 	if ($o->{dump_as_body}) {
 		$n{data} =~ s|DUMP_AS_BODY_HAS_BEEN_SET|get_running_state(\%n)|e;
@@ -3082,6 +3119,10 @@ In a STARTTLS or XCLIENT session, quit after the second HELO.  Otherwise quit af
 
 Quit after authentication.  This always quits after the point where authentication would have been negotiated, regardless of whether it was attempted.
 
+=item VRFY
+
+Quit after VRFY.
+
 =item MAIL, FROM
 
 Quit after MAIL FROM: is sent.
@@ -3159,6 +3200,10 @@ If the remote server supports it, attempt SMTP PIPELINING (RFC 2920).  This is a
 =item --force-getpwuid
 
 Tell swaks to use the getpwuid method of finding the default sender local-part instead of trying $LOGNAME first.
+
+=item --vrfy
+
+Issue VRFY before MAIL.
 
 =back
 
