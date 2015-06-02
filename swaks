@@ -3201,7 +3201,7 @@ If the remote server supports it, attempt SMTP PIPELINING (RFC 2920).  This is a
 
 Tell swaks to use the getpwuid method of finding the default sender local-part instead of trying $LOGNAME first.
 
-=item --vrfy
+=item --vrfy [email-address[,email-address,...]]
 
 Issue VRFY before MAIL.
 
