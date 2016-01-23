@@ -75,7 +75,7 @@ if ($G::dump_args) {
 # XXX hash that we can pass verbatim here
 open_link();
 
-sendmail($opts->{from}, $opts->{to}, $opts->{helo}, $opts->{data},
+sendmail($opts->{from}, $opts->{to}, $opts->{cc}, $opts->{helo}, $opts->{data},
          $opts->{a_user}, $opts->{a_pass}, $opts->{a_type});
 
 teardown_link();
@@ -173,6 +173,7 @@ sub open_link {
 sub sendmail {
 	my $from    = shift; # envelope-from
 	my $to      = shift; # envelope-to
+	my $cc      = shift; # envelope-cc
 	my $helo    = shift; # who am I?
 	my $data    = shift; # body of message (content after DATA command)
 	my $a_user  = shift; # what user to auth with?
@@ -314,10 +315,13 @@ sub sendmail {
 	do_smtp_quit(1, 0) if ($G::quit_after eq 'mail');
 
 	# send RCPT (sub handles multiple, comma-delimited recips
+
 	do_smtp_rcpt($to); # failures in this handled by smtp_rcpt_callback
 	                   # note that smtp_rcpt_callback increments
 	                   # $G::smtp_rcpt_failures at every failure.  This and
 	                   # $G::smtp_rcpt_total are used after DATA for LMTP
+	do_smtp_rcpt($cc);
+
 
 	# QUIT here if the user has asked us to do so
 	do_smtp_quit(1, 0) if ($G::quit_after eq 'rcpt');
@@ -1497,6 +1501,8 @@ sub get_option_struct {
 		# envelope-(t)o address
 		{ opts => ['t', 'to'],                        suffix => ':s',
 		  okey => 'mail_to',                          type => 'scalar', },
+		{ opts => ['c', 'cc'],                        suffix => ':s',
+		  okey => 'mail_cc',                          type => 'scalar', },
 		# (h)elo string
 		{ opts => ['h', 'helo', 'ehlo', 'lhlo'],      suffix => ':s',
 		  okey => 'mail_helo',                        type => 'scalar', },
@@ -2131,6 +2137,8 @@ sub process_args {
 	#	$G::link{server} = get_server($o->{copy_routing} ?  $o->{copy_routing} : $n{to}) if (!$G::link{server});
 	#	$G::link{type}   = "socket-inet";
 	#}
+
+	$n{cc} = $o->{mail_cc};
 	
 	# try to catch obvious -s/-li/-4/-6 errors as soon as possible.  We don't actually do any DNS
 	# lookups ourselves, so errors like -s being a domain with only A RRs and -li being a domain 
@@ -2301,6 +2309,7 @@ sub process_args {
 	if (!$o->{no_data_fixup}) {
 		$n{data} =~ s/%BODY%/$body/g;
 		$n{data} =~ s/%B/$body/g if ($O{use_old_data_tokens});
+		push(@{$o->{add_header}}, "Cc: $n{cc}") if $n{cc};
 		if (defined($o->{header}) && ref($o->{header}) eq 'ARRAY' && scalar(@{$o->{header}})) {
 			foreach my $l (map { split(/\\n/) } @{$o->{header}}) {
 				if (my($h) = $l =~ /^([^:]+):/) {
@@ -3084,6 +3093,11 @@ There is no default value for this option.  If no recipients are provided via an
 =item -f, --from [email-address]
 
 Use argument as envelope-sender for email, or prompt user if no argument specified.  The string <> can be supplied to mean the null sender.  If user does not specify a sender address a default value is used.  The domain-part of the default sender is a best guess at the fully-qualified domain name of the local host.  The method of determining the local-part varies.  On Windows, Win32::LoginName() is used.  On unix-ish platforms, the $LOGNAME environment variable is used if it is set.  Otherwise getpwuid(3) is used.  See also --force-getpwuid.
+
+
+=item -c, --cc [email-address[,email-address,...]]
+
+Tells swaks to use argument(s) as the envelope-recipient for the email in addition to those from --to, the recipient domain is needed to determine routing the domain of the last recipient provided is used. Also add these as a Cc header.
 
 =item --ehlo, --lhlo, -h, --helo [helo-string]
 
